@@ -1,0 +1,30 @@
+name: Build rtrs Linux CPython 3.13 wheel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out rtrs v0.2.4
+        uses: actions/checkout@v4
+        with:
+          ref: v0.2.4
+
+      - name: Build manylinux x86_64 CPython 3.13 wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: auto
+          args: --release --out dist --features python -i python3.13
+
+      - name: Upload offline-installable wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtrs-0.2.4-linux-cp313-x86_64
+          path: dist/*.whl
+          if-no-files-found: error
