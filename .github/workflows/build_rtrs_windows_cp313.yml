@@ -1,0 +1,73 @@
+name: Build rtrs Windows CPython 3.13 wheel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build_windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out fork default branch
+        uses: actions/checkout@v4
+
+      - name: Set up 64-bit Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: 'x64'
+
+      - name: Set up stable Rust for Windows MSVC
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Check rtrs version and update PyO3 for Python 3.13
+        run: |
+          $cargo = Get-Content -Path Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^version\s*=\s*"0\.2\.4"\s*$') {
+            throw 'Expected rtrs 0.2.4; stop instead of building a different version.'
+          }
+          $old = 'pyo3 = { version = "0.18", optional = true, features = ["extension-module"] }'
+          $new = 'pyo3 = { version = "0.22", optional = true, features = ["extension-module", "gil-refs"] }'
+          if (-not $cargo.Contains($old)) {
+            throw 'PyO3 dependency line has changed; inspect upstream Cargo.toml before building.'
+          }
+          Set-Content -Path Cargo.toml -Value ($cargo.Replace($old, $new)) -NoNewline -Encoding utf8
+          Write-Host 'Temporarily switched to PyO3 0.22 / gil-refs for CPython 3.13.'
+          python --version
+          rustc --version
+
+      - name: Build Windows x64 CPython 3.13 wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-pc-windows-msvc
+          args: --release --out dist --features python -i python
+
+      - name: Install and smoke-test Windows wheel
+        run: |
+          $wheels = @(Get-ChildItem -Path dist -Filter '*.whl')
+          if ($wheels.Count -ne 1) {
+            throw "Expected exactly 1 wheel, got $($wheels.Count)."
+          }
+          $wheel = $wheels[0]
+          if ($wheel.Name -notmatch 'cp313.*win_amd64\.whl$') {
+            throw "Unexpected wheel compatibility tag: $($wheel.Name)"
+          }
+          python -m pip install --no-deps --force-reinstall "$($wheel.FullName)"
+          if ($LASTEXITCODE -ne 0) { throw 'Wheel installation failed.' }
+          python -c "import rtrs; assert callable(rtrs.run_simulation); print('Windows CPython 3.13: rtrs imported successfully')"
+          if ($LASTEXITCODE -ne 0) { throw 'rtrs import smoke test failed.' }
+
+      - name: Upload Windows wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtrs-0.2.4-windows-cp313-amd64
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 30
